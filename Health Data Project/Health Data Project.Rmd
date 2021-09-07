@@ -1,0 +1,1003 @@
+---
+title: "Assignment Deliverable Two"
+author: "Xiao Hui Wu SID 306175207"
+date: "28/05/2020"
+output:
+  html_document: default
+  pdf_document: default
+  word_document: default
+---
+**Overview of the problem: **
+
+Average life expectancy for human being has increased drastically in the last fifty years. And one of the key driving factors is rapidly developed technologes that are widely applied in health related field. With more advanced detection methods, most of terminal diseases can now be discovered much earlier which give patients higher chance of living. However, even with all the latest technologies, surgery remains one of the best/only options in many circumstances (i.e. Steve Jobs probably could have a higher chance of living if he chose to undergo surgical path in the first instance). In 2004, WHO has estimated that 234 million operations were performed every year (*reference 1*)  and 7 million people suffers complication after (at least one million death). Therefore, complication is one of the key risks that surgical patients are facing. I hope by analysing this datasets, it can provide some insights to patients and doctors in estimating risks of complication and thus help patients and medical professionals getting better prepared. 
+  
+Dataset I am using for this project is from Kaggle (*reference 2*) that containes information of more than 14,000 surgical operations. It has got various kinds of data such as personal details of patients i.e. age, gender, race, and some health-related data such as bmi, different types of baseline illness as well as date and duration of surgeries and etc. The dataset contains ~14600 cases with 24 features. For this assignment, I am using this data try to solve a supervised classification problem: whether a patient will face complications after surgery based on the given information.
+
+```{r,include=FALSE}
+mydata <- read.csv("Surgical-deepnet.csv",header = TRUE)
+dim(mydata)
+sum(is.na(mydata))
+```
+
+```{r,include=FALSE}
+#check data type of each feature
+lapply(mydata,function(x) class(x))
+```
+**Dataset description:**
+
+The dataset has got 14,635 rows and 25 columns. Most of the data are intergers or floats with a separate Data Dictionary explains the meaning of these numbers from each column. Some columns contain binary information such as gender while other columns contain multi-class information such as race.
+One challenge is there seems to be some duplicated data. However, without any unique patient ID/Names it is quite difficult to identify any duplicated rows based on any given features directly. One approach to be used here in order to solve this issue is to add an extra feature that is derived from the existing 24 features. Because all of the 24 existing features are in numerical format, I am going to use *sum(feature1^3 + feature2^3 + … +feature24^3)* as my new feature. Therefore any duplicated rows will result in equal value in the newly created feature. And by using this method we also try to mitigate risks of deleting any non-duplicated rows. Because some columns contain information such as duration of surgrey down to minutes and others contain index information with 8 decimals, it is highly unlikely that two patients have got exactly the same numbers across all 24 features. By implementing the method described above, 2902 duplicated rows have been identified and removed. Dimension of the cleaned database is now 11733 rows x 25 columns. 
+
+
+```{r,echo=FALSE,warning=FALSE}
+label <- mydata[25]
+label[label==0]<-"neg"
+label[label==1]<-"pos"
+mydata$complication[mydata$complication==0]<-"neg"
+mydata$complication[mydata$complication==1]<-"pos"
+table(mydata$complication)
+```
+
+```{r}
+#identifying duplicates in data
+#to create a new column that is dervied from existing columns
+mydata$check <- mydata$bmi^3 + mydata$Age^3 + mydata$asa_status^3 + mydata$baseline_cancer^3 + mydata$baseline_charlson + mydata$baseline_cvd +
+  mydata$baseline_dementia^+mydata$baseline_diabetes^3+mydata$baseline_digestive^3+mydata$baseline_osteoart^3+mydata$baseline_psych^3+mydata$baseline_pulmonary^3+mydata$ahrq_ccs^3+mydata$ccsComplicationRate^3+mydata$ccsMort30Rate^3+mydata$complication_rsi^3+mydata$dow^3+mydata$gender^3+mydata$hour^3+mydata$month^3+mydata$moonphase^3+mydata$mort30^3+mydata$mortality_rsi^3+mydata$race^3
+```
+
+```{r,echo=FALSE,results="hide"}
+# return total number of duplciated rows
+sum(duplicated(mydata$check))
+
+# remove the duplciated rows
+mydata<-mydata[!duplicated(mydata$check),]
+
+# remove the added column from above that is used to check duplications
+mydata<-mydata[,-26]
+
+# return the dimension of the cleaned database
+dim(mydata)
+
+# check the class balance of the cleaned database
+table(mydata$complication)
+```
+**Some insights of the data:**
+
+Average age of patients in the dataset is 56.57 years old. More than 77% of all patient are overweight: 27.69% are overweight (bmi > 25) and 49.45% are obese (bmi >30) (*reference 3*). Number of female is slighter higher than male. Operation hours range from 6-18 and most of the operations last between 7-10 hours (please see four diagrams below for details, code can be found in appendix 1).
+
+```{r,echo=FALSE}
+par(mfrow = c(2,2))
+#age group histogram
+hist(mydata$Age,xlab = "Age of patient", main = "Patients by Age Group")
+#patient bmi status
+hist(mydata$bmi,xlab = "patient bmi", main = "Bmi Histogram of Patients")
+#patient by gender
+hist(mydata$gender,breaks = 2, xlab = "0.0-0.5 rep Male", main = "Gender Mix")
+#Operation hours
+hist(mydata$hour,xlab = "Hours",main= "Operation Hours")
+```
+
+```{r,include=FALSE,echo=FALSE}
+mean(mydata$Age)
+#number of people overweight
+sum(mydata$bmi>25 & mydata$bmi<30)/nrow(mydata)
+#number of people obese
+sum(mydata$bmi>= 30)/nrow(mydata)
+#gender mix
+sum(mydata$gender==1)
+sum(mydata$gender==0)
+
+
+```
+
+**Outlier**
+
+From the below boxplot, we can see IQR for feature "Age" is approximately between 50 to 75 and there are some outlier with people age below 20.
+Thus, 30 outliers (patients with age<=20) are identified and taken out of the dataset. 
+
+
+```{r,fig.height=3,fig.width=5,echo = TRUE}
+#outliner
+boxplot(mydata$Age,ylab = "Age of patient",main = "boxplot of age distribution")
+outlier <- subset(mydata,mydata$Age<=20)
+mydata<-subset(mydata,mydata$Age>20)
+```
+
+
+
+
+
+
+
+**Feature Selection**
+
+
+Data is split at a ratio of 0.75 and 0.25 for training and testing purpose. Training data will be used for data preprocessing (feature selection and dimensional reduction) and hyperparameter tuning. Test data will be used to evaluate models' performances. 
+
+Before doing any further feature engineering, there are several features that are highly correlated such as "complication_rsi", "ccsComplicationRate", "mort30" and "ccsMort30Rate". First pair are indexes showing risks of complication and second pair indicate 30 days mortality of patients. They are highly correlated to the classification labels (espically for "complication-rsi" which is Risk Stratification Index (In-Hosptial Complications) that is used to predict Patient outcomes for in hospital Mortality and is calculated based on Complication - our classificatio label). Therefore, these features do not provide meaningful information to our analysis since they are partly derived from our prediction target.   
+
+Forward stepwise selectin appraoch is implemented to rank the importance of features. Please note predicting model I am using in the forward stepwise selection is random forest classifier. 
+
+Since key of this classification problem is to identify any patients with risk of complications, recall will be the most important measure to evaluate the effectiveness of the model (since we do not want any patients with complication risks to be predicted as negative) as well as F1 score. And because the two classes are inbalanced (~8k pos vs ~3.5k neg), therefore accuracy will not be a good evaluation metrics here.
+
+After features have been ranked, they are then passed into classification model (i.e. we first use top 5 features, then top 6 and so on) to see if any additional features will deteroiate/not improve our model's performance. Here we use logistic regression as the predicting model. No features that reduce the perfomrance of the model in regards to recall and F1-score. Therefore all features will be kept and used for further processing and training.
+
+```{r,include=FALSE}
+
+#please run but no show
+head(mydata,10)
+mydata<-mydata[-14]
+mydata<-mydata[-14]
+mydata<-mydata[-14]
+head(mydata,10)
+mydata<-mydata[-19]
+mydata<-mydata[-19]
+dim(mydata)
+head(mydata,10)
+```
+
+
+
+
+```{r,warning=FALSE,message=FALSE}
+#feature selection - rank of all 19 features based on Recall instead of accuracy
+library(class)
+library(randomForest)
+mydata$complication = as.factor(mydata$complication)
+
+
+selectFeature <- function(train, test, features) {
+  ## identify a feature to be selected
+  current.best.accuracy <- -Inf
+  selected.i <- NULL
+  for(i in 1:ncol(train[,-20])) {
+    current.f <- colnames(train)[i]
+    if(!current.f %in% features) {
+      model <- randomForest(complication~., data = cbind(train[features], train[current.f],train[20]),ntree=33,mtry=3)
+      pred <- predict(model,newdata = cbind(test[features], test[current.f],test[20]))
+      TP <- sum((test$complication == pred)[pred == "pos"])
+      FN <- sum((test$complication != pred)[pred == "neg"])
+      test.acc <- TP/(TP+FN)
+      
+      if(test.acc > current.best.accuracy) {
+        current.best.accuracy <- test.acc
+        selected.i <- colnames(train)[i]
+      }
+    }
+  }
+  return(selected.i)
+}
+
+##
+library(caret)
+set.seed(1234)
+inTrain <- createDataPartition(mydata$complication, p = .75)[[1]]
+#allFeatures <- colnames(mydata)[-25]
+train <- mydata[ inTrain,]
+test  <- mydata[-inTrain,]
+cls.train <- mydata$complication[inTrain]
+cls.test <- mydata$complication[-inTrain]
+
+features <- NULL
+# select the 1 to 10 best features using knn as a wrapper classifier
+for (j in 1:19) {
+  selected.i <- selectFeature(train, test, features)
+  print(selected.i)
+
+  # add the best feature from current run
+  features <- c(features, selected.i)
+}
+
+
+```
+
+
+
+
+
+
+```{r,echo=TRUE,results="hide"}
+# to check if any additional feature will deterioate model performance
+myfeature <- features
+F1_his <- c()
+Recall_his <- c()
+
+for (x in 5:19){
+model.log <- train(complication ~ .,
+                   data = cbind(train[myfeature[1:x]],train[20]),
+                   method = "glm",family = binomial(link = 'logit'),
+                   trControl = trainControl(method = "repeatedcv",
+                                           repeats = 5))
+model.log.pred <- predict(model.log,newdata = cbind(test[myfeature[1:x]],test[20]))
+TP <- sum((test$complication == model.log.pred)[model.log.pred == "pos"])
+TN <- sum((test$complication == model.log.pred)[model.log.pred == "neg"])
+FP <- sum((test$complication != model.log.pred)[model.log.pred == "pos"])
+FN <- sum((test$complication != model.log.pred)[model.log.pred == "neg"])
+Precision <- TP/(TP+FP)
+Recall <- TP/(TP+FN)
+F1.socre <- 2*Precision*Recall/(Precision+Recall) 
+F1_his <- c(F1_his,F1.socre)
+Recall_his <- c(Recall_his,Recall)
+}
+
+F1_his
+Recall_his
+
+```
+
+
+
+
+
+
+**Perform dimension reduction (PCA) on features**
+
+
+PCA is performed on the dataset (code in appendix 2) after feature cleaning and feature selection. Please see below two bar chart, the one on the left hand side shows ranks of variance explained by each PCA component in descendent order. The one on the right hand displays the cumulative percentage of variance can be explained by PCA components. Overall, close to 95% of the variances can be explained by top 4 PCA components. Please note that PCA is performed on Training dataset only and Test dataset's PCA is calucaluted by projecting the features onto the same PCA space as Training dataset to prevent any information leakage from Test to Training dataset. For k-fold cross validation, PCA will be performed during every loop on training data (k-1) only and validation data's PCA components will be calculated by projecting its features onto the same PCA space as the training data (k-1).
+
+
+```{r,echo=FALSE,fig.height=4,fig.width=10}
+myfeature <- features
+trainclean<-cbind(train[myfeature],train$complication)
+testclean<-cbind(test[myfeature],test$complication)
+PCA <- prcomp(trainclean[,-20])
+PCA.Var <- PCA$sdev^2
+PCA.Var.Per <- PCA.Var/sum(PCA.Var)*100
+par(mfrow = c(1,2))
+barplot(PCA$sdev^2/sum(PCA$sdev^2)*100,main = "PCA component Var Rank", xlab = "Pincipal component", ylab = "Percentage Variation")
+barplot(cumsum(PCA.Var.Per),main = "Cum Var by PCA component",xlab = "Pincipal component", ylab = "Percentage Variation")
+#cumsum(PCA.Var.Per)
+
+newfeature1 <- PCA$x[,1]
+newfeature2 <- PCA$x[,2]
+newfeature3 <- PCA$x[,3]
+newfeature4 <- PCA$x[,4]
+
+mydata.df <- data.frame(PC1 = PCA$x[,1],PC2 = PCA$x[,2],labels = as.factor(train[,20]))
+
+library(ggplot2)
+
+ggplot(mydata.df,aes(PC1,PC2,col = labels))+geom_point(size=1)+ggtitle("Plot with the top 2 PCA component")
+
+```
+
+
+**Prediction with different models**
+
+
+```{r,include=FALSE}
+newtrain <- cbind(newfeature1,newfeature2,newfeature3,newfeature4,train[20])
+pca2<-predict(PCA,newdata = testclean[,-20])
+newtest <- cbind(pca2[,1],pca2[,2],pca2[,3],pca2[,4],test[20])
+names(newtest)[1] <- "newfeature1"
+names(newtest)[2] <- "newfeature2"
+names(newtest)[3] <- "newfeature3"
+names(newtest)[4] <- "newfeature4"
+
+
+```
+
+
+
+
+**Random Forest**
+
+Decision tree is a popular machine learning algorithm when it comes to visualising and communicating ideas with people who may not have a solid understanding in data science. It splits the data into different classes by chosing features based on Gini index or IG in order to get the purest set. It can be used for both regression and classification tasks. Random Forest is an ensemble of Decision Trees (using bootstrap) that has an overall better performance. One thing I have noticed here is after I performed PCA on testdata, I named columns of the test data differently to the training dataset and this has caused some issues when I tried to apply the test dataset in my random forest model for predictions (SVM does not seem to have this issue). 
+
+There are two hyperparameters need to be tuned here: number of trees to use ($ntree$) and the number of variables to consider at each split ($mtry$) (code in appendix 3). 10-fold cross-validation is used to loop through different values and compare their performance using Recall and F1-Score. Please see below charts for hyperparameter value vs recall. 
+
+After trying different values for "$Ntree$" and "$mtry$", 13 ($ntree$) and 4 ($mtry$) seems to have the best performance. Once the hyperparameter has been set, the model will be trained using full training dataset and to make prediction on the test dataset.
+
+Result: the random forest model has achieved Recall of 0.66, F1.score of 0.76 and 88% in accuracy on test dataset. Please note random forest will return a slightly different result everytime it runs, and thus the number here might be a bit different to the numbers below (code in appendix 4).
+
+
+
+
+
+```{r,collapse=TRUE,fig.height=3.5,fig.width=8.5,warning=FALSE}
+##Random Forest H-parameter tuning NTree
+set.seed(321)
+fold <- createFolds(newtrain$complication, k = 10)
+
+recall_hist <- c()
+F1.score_hist <-c()
+values <- seq(1,50,by=2)
+for (x in values){
+  for (i in length(fold)){
+    
+    mypca<-prcomp(trainclean[-fold[[i]],-20])
+    newv<-predict(mypca,newdata=trainclean[fold[[i]],-20])
+
+    complications<- as.factor(trainclean[-fold[[i]],20])
+    newtrains<-data.frame(newfeature1=mypca$x[,1],newfeature2=mypca$x[,2],newfeature3=mypca$x[,3],newfeature4=mypca$x[,4],complication=complications)
+
+    complications2<- trainclean[fold[[i]],20]
+    newvali<-data.frame(newfeature1=newv[,1],newfeature2=newv[,2],newfeature3=newv[,3],newfeature4=newv[,4],complication=complications2)
+
+    
+    recall_hist2 <- c()
+    F1.score_hist2 <-c()
+    rand.mod <- randomForest(complication~.,data=newtrains,ntree = x)
+    pred <- predict(rand.mod,newdata=newvali)
+    TP <- sum((newvali[,5] == pred)[pred == "pos"])
+    TN <- sum((newvali[,5] == pred)[pred == "neg"])
+    FP <- sum((newvali[,5] != pred)[pred == "pos"])
+    FN <- sum((newvali[,5] != pred)[pred == "neg"])
+    Precision <- TP/(TP+FP)
+    Recall <- TP/(TP+FN)
+    F1.socre <- 2*Precision*Recall/(Precision+Recall)
+    recall_hist2 <- c(recall_hist2,Recall)
+    recall_hist <- c(recall_hist,mean(recall_hist2))
+    F1.score_hist2 <-c(F1.score_hist2,F1.socre)
+    F1.score_hist<-c(F1.score_hist,mean(F1.score_hist2))
+}
+}
+
+cat("'NTree' value with best recall:", values[which.max(recall_hist)],"with: ","Recall:",max(recall_hist),"\n")
+
+cat("'Ntree' with best overall Recall & F1.Score:",values[which.max(F1.score_hist+recall_hist)],"recall:",recall_hist[which.max(F1.score_hist+recall_hist)],"F1:",F1.score_hist[which.max(F1.score_hist+recall_hist)])
+
+par(mfrow=c(1,2))
+plot(values,recall_hist,type="l",main="Ntree vs Recall",xlab="Ntree",ylab="Recall")
+plot(values,F1.score_hist,type="l",main="Ntree vs F1_score",xlab="Ntree",ylab="F1_score")
+```
+
+
+```{r,echo=FALSE,collapse=TRUE,fig.height=3.5,fig.width=8.5}
+## random forest H-parameter tuning mtry
+set.seed(321)
+fold <- createFolds(newtrain$complication, k = 10)
+recall_hist <- c()
+F1.score_hist <-c()
+values <- seq(1,4,by=1)
+for (x in values){
+  for (i in length(fold)){
+    
+    mypca<-prcomp(trainclean[-fold[[i]],-20])
+    newv<-predict(mypca,newdata=trainclean[fold[[i]],-20])
+
+    complications<- as.factor(trainclean[-fold[[i]],20])
+    newtrains<-data.frame(newfeature1=mypca$x[,1],newfeature2=mypca$x[,2],newfeature3=mypca$x[,3],newfeature4=mypca$x[,4],complication=complications)
+
+
+    complications2<- trainclean[fold[[i]],20]
+    newvali<-data.frame(newfeature1=newv[,1],newfeature2=newv[,2],newfeature3=newv[,3],newfeature4=newv[,4],complication=complications2)
+
+    
+    
+    recall_hist2 <- c()
+    F1.score_hist2 <-c()
+    rand.mod <- randomForest(complication~.,data=newtrains,ntree = 13,mtry = x)
+    pred <- predict(rand.mod,newdata=newvali)
+    TP <- sum((newvali[,5] == pred)[pred == "pos"])
+    TN <- sum((newvali[,5] == pred)[pred == "neg"])
+    FP <- sum((newvali[,5] != pred)[pred == "pos"])
+    FN <- sum((newvali[,5] != pred)[pred == "neg"])
+    Precision <- TP/(TP+FP)
+    Recall <- TP/(TP+FN)
+    F1.socre <- 2*Precision*Recall/(Precision+Recall)
+    recall_hist2 <- c(recall_hist2,Recall)
+    recall_hist <- c(recall_hist,mean(recall_hist2))
+    F1.score_hist2 <-c(F1.score_hist2,F1.socre)
+    F1.score_hist<-c(F1.score_hist,mean(F1.score_hist2))
+}
+}
+
+cat("'mtry' value with best recall:", values[which.max(recall_hist)],"Recall:",max(recall_hist),"\n")
+cat("'mtry' value with best overall Recall & F1.Score:",values[which.max(F1.score_hist+recall_hist)],"recall:",recall_hist[which.max(F1.score_hist+recall_hist)],"F1:",F1.score_hist[which.max(F1.score_hist+recall_hist)])
+
+par(mfrow=c(1,2))
+plot(values,recall_hist,type="l",main="mtry vs Recall",xlab="mtry",ylab="Recall")
+plot(values,F1.score_hist,type="l",main="mtry vs F1_score",xlab="mtry",ylab="F1_score")
+```
+
+
+
+```{r,collapse=TRUE,echo=FALSE}
+library(randomForest)
+random.model <- randomForest(complication~.,data = newtrain,mtry=4,ntree=13)
+pred.rand <- predict(random.model,newdata = newtest)
+
+TP <- sum((newtest$complication == pred.rand)[pred.rand == "pos"])
+TN <- sum((newtest$complication == pred.rand)[pred.rand == "neg"])
+FP <- sum((newtest$complication != pred.rand)[pred.rand == "pos"])
+FN <- sum((newtest$complication != pred.rand)[pred.rand == "neg"])
+Precision <- TP/(TP+FP)
+Recall <- TP/(TP+FN)
+F1.socre <- 2*Precision*Recall/(Precision+Recall) 
+acc <- sum(newtest$complication == pred.rand)/length(newtest$complication)
+
+cat("Below is Random Forest Performance on Test data with Optimised 'ntree' and 'mtry':","\n")
+table(pred.rand,newtest$complication)[2:1,2:1]
+cat("Random Forest Recall on Test data:", Recall, "\n")
+cat("Random Forest F1.Score on Test data:",F1.socre,"\n")
+cat("Random Forest Accuracy on Test data:",acc,"\n")
+
+random.recall <- Recall
+random.F1<-F1.socre
+```
+
+
+**K Nearest Neighbour**
+
+K nearest neighbour is a relatively simple supervised machine learning algorithm when comes to its concepts and implementations. It can be used for both classification and regression problems. The way it works is trying to classify a data point to the same class as its nearest neighbour/neighbours. And there are a few different ways of calculating the distance that determines who is the closest neighbour (i.e. Euclidean distancing is the most commonly used). In knn, there is one hyperparameter we need to tune: $K$ - number of neighbours to be considered. This decides how many neighours we need to consider before assigning a data to any classes (i.e. to consider top10, top5 or maybe top3 closest neighours). Using different values of $K$ will have a direct impact on outcomes.
+
+Again, cross-validation is used here to evaluate model's performance using a series of different value for $K$. And it turns out that K=9 produces the best Recall and F1 score overall.
+
+Full training dataset is then passed to the model with k=9. The model then makes prediction on the test dataset and has the following result: Recall = 0.52, F1-score = 0.68 and accuracy = 86% (code in appendix 5). 
+
+
+```{r,collapse=TRUE,fig.height=3.5,fig.width=8.5}
+## KNN H-parameter tuning number of neighbour
+library(class)
+
+set.seed(4321)
+fold <- createFolds(newtrain$complication, k = 10)
+
+recall_hist <- c()
+F1.score_hist <-c()
+values <- seq(1,20,by=1)
+for (x in values){
+  for (i in length(fold)){
+    
+    mypca<-prcomp(trainclean[-fold[[i]],-20])
+    newv<-predict(mypca,newdata=trainclean[fold[[i]],-20])
+
+    complications<- as.factor(trainclean[-fold[[i]],20])
+    newtrains<-data.frame(newfeature1=mypca$x[,1],newfeature2=mypca$x[,2],newfeature3=mypca$x[,3],newfeature4=mypca$x[,4],complication=complications)
+    complications2<- trainclean[fold[[i]],20]
+    newvali<-data.frame(newfeature1=newv[,1],newfeature2=newv[,2],newfeature3=newv[,3],newfeature4=newv[,4],complication=complications2)
+    
+    
+    recall_hist2 <- c()
+    F1.score_hist2 <-c()
+    knn.mod <- knn(train=newtrains[,-5],test=newvali[,-5],cl=newtrains[,5],k=x)
+    TP <- sum((newvali[,5] == knn.mod)[pred == "pos"])
+    TN <- sum((newvali[,5] == knn.mod)[pred == "neg"])
+    FP <- sum((newvali[,5] != knn.mod)[pred == "pos"])
+    FN <- sum((newvali[,5] != knn.mod)[pred == "neg"])
+    Precision <- TP/(TP+FP)
+    Recall <- TP/(TP+FN)
+    F1.socre <- 2*Precision*Recall/(Precision+Recall)
+    recall_hist2 <- c(recall_hist2,Recall)
+    recall_hist <- c(recall_hist,mean(recall_hist2))
+    F1.score_hist2 <-c(F1.score_hist2,F1.socre)
+    F1.score_hist<-c(F1.score_hist,mean(F1.score_hist2))
+}
+}
+
+cat("'K' value with best recall:", values[which.max(recall_hist)],"Recall:",max(recall_hist),"\n")
+cat("'K' value with best overall Recall & F1.Score:",values[which.max(F1.score_hist+recall_hist)],"recall:",recall_hist[which.max(F1.score_hist+recall_hist)],"F1:",F1.score_hist[which.max(F1.score_hist+recall_hist)])
+
+par(mfrow=c(1,2))
+plot(values,recall_hist,type="l",main="number of neigbour K vs Recall",xlab="K",ylab="Recall")
+plot(values,F1.score_hist,type="l",main="number of neigbour K vs F1_score",xlab="K",ylab="F1_score")
+```
+
+```{r,collapse=TRUE,echo=FALSE}
+##fitting training data to KNN with optimal K
+
+knn.mod2 <- knn(newtrain[-5],newtest[-5],cl=newtrain[,5],k=9)
+
+TP <- sum((newtest$complication == knn.mod2)[knn.mod2 == "pos"])
+TN <- sum((newtest$complication == knn.mod2)[knn.mod2 == "neg"])
+FP <- sum((newtest$complication != knn.mod2)[knn.mod2 == "pos"])
+FN <- sum((newtest$complication != knn.mod2)[knn.mod2 == "neg"])
+Precision <- TP/(TP+FP)
+Recall <- TP/(TP+FN)
+F1.socre <- 2*Precision*Recall/(Precision+Recall) 
+acc <- sum(newtest$complication == pred.rand)/length(newtest$complication)
+
+cat("Below is KNN Performance on Test data with Optimised 'k':","\n")
+table(knn.mod2,newtest$complication)[2:1,2:1]
+cat("KNN Recall on Test data:", Recall, "\n")
+cat("KNN F1.Score on Test data:",F1.socre,"\n")
+cat("KNN Accuracy on Test data:",acc,"\n")
+k.recall <- Recall
+k.F1<-F1.socre
+
+```
+
+
+
+
+**Support vector machine (SVM)**
+
+In support vector classifier, we are trying to draw a hyperplane that separates the two classes and maximises the distances between the hypeplane and its closest points from each classes (supporting vectors). Radial kernel is used to bring the feature space to infinite dimension. A soft margin is used to allow some data point to cross the margin. "$Cost$" and "$Gamma$" are the two hypeparameters need to be tuned. As shown below, we use cross-validation to validate the performance with various values for "$Cost$" and "$Gamma$" (code for "$Cost$" tuning is in appendix 6). "Cost" equals to 31 and "$Gamma$" equals to 4 gives the best performance in Recall (0.59) and F1_score (0.67) (code can be found in appendix 7).
+
+
+
+```{r,collapse=TRUE,fig.height=3.5,fig.width=8.5,warning=FALSE}
+##SVM H-parameter tuning - Gamma
+library(e1071)
+set.seed(321)
+fold <- createFolds(newtrain$complication, k = 5)
+
+values <- seq(1,40,by=3)
+
+F1.score_hist <-c()
+recall_hist <- c()
+for (x in values){
+  for (i in length(fold)){
+    
+    mypca<-prcomp(trainclean[-fold[[i]],-20])
+    newv<-predict(mypca,newdata=trainclean[fold[[i]],-20])
+
+    complications<- as.factor(trainclean[-fold[[i]],20])
+    newtrains<-data.frame(newfeature1=mypca$x[,1],newfeature2=mypca$x[,2],newfeature3=mypca$x[,3],newfeature4=mypca$x[,4],complication=complications)
+    complications2<- trainclean[fold[[i]],20]
+    newvali<-data.frame(newfeature1=newv[,1],newfeature2=newv[,2],newfeature3=newv[,3],newfeature4=newv[,4],complication=complications2)
+    
+    recall_hist2 <- c()
+    F1.score_hist2 <-c()
+    mod <- svm(x=newtrains[,-5],y=newtrains[,5],kernel="radial",type="C-classification",cost=11,gamma=x)
+    pred <- predict(mod,newvali[,-5])
+    TP <- sum((newvali[,5] == pred)[pred == "pos"])
+    TN <- sum((newvali[,5] == pred)[pred == "neg"])
+    FP <- sum((newvali[,5] != pred)[pred == "pos"])
+    FN <- sum((newvali[,5] != pred)[pred == "neg"])
+    Precision <- TP/(TP+FP)
+    Recall <- TP/(TP+FN)
+    F1.socre <- 2*Precision*Recall/(Precision+Recall)
+    recall_hist2 <- c(recall_hist2,Recall)
+    recall_hist <- c(recall_hist,mean(recall_hist2))
+    F1.score_hist2 <-c(F1.score_hist2,F1.socre)
+    F1.score_hist<-c(F1.score_hist,mean(F1.score_hist2))
+}
+}
+
+cat("'Gamma' value with best Recall:", values[which.max(recall_hist)],"Recall:",max(recall_hist),"\n")
+cat("'Gamma' value with overall Recall & F1.Score:",values[which.max(F1.score_hist+recall_hist)],"recall:",recall_hist[which.max(F1.score_hist+recall_hist)],"F1:",F1.score_hist[which.max(F1.score_hist+recall_hist)])
+
+par(mfrow=c(1,2))
+plot(values,recall_hist,type="l",main="Gamma value vs Recall",xlab="Gamma",ylab="Recall")
+plot(values,F1.score_hist,type="l",main="Gamma value vs F1_score",xlab="Gamma",ylab="F1_score")
+```
+
+
+```{r,echo=FALSE,collapse=TRUE,fig.height=3.5,fig.width=8.5}
+##SVM H-parameter tuning - Cost
+library(e1071)
+set.seed(321)
+fold <- createFolds(newtrain$complication, k = 5)
+
+values <- c(seq(1,100,by=10),500)
+
+F1.score_hist <-c()
+recall_hist <- c()
+for (x in values){
+  for (i in length(fold)){
+    
+    mypca<-prcomp(trainclean[-fold[[i]],-20])
+    newv<-predict(mypca,newdata=trainclean[fold[[i]],-20])
+
+    complications<- as.factor(trainclean[-fold[[i]],20])
+    newtrains<-data.frame(newfeature1=mypca$x[,1],newfeature2=mypca$x[,2],newfeature3=mypca$x[,3],newfeature4=mypca$x[,4],complication=complications)
+    complications2<- trainclean[fold[[i]],20]
+    newvali<-data.frame(newfeature1=newv[,1],newfeature2=newv[,2],newfeature3=newv[,3],newfeature4=newv[,4],complication=complications2)
+    
+    recall_hist2 <- c()
+    F1.score_hist2 <-c()
+    mod <- svm(x=newtrains[,-5],y=newtrains[,5],kernel="radial",type="C-classification",cost=x,gamma=4)
+    pred <- predict(mod,newvali[,-5])
+    TP <- sum((newvali[,5] == pred)[pred == "pos"])
+    TN <- sum((newvali[,5] == pred)[pred == "neg"])
+    FP <- sum((newvali[,5] != pred)[pred == "pos"])
+    FN <- sum((newvali[,5] != pred)[pred == "neg"])
+    Precision <- TP/(TP+FP)
+    Recall <- TP/(TP+FN)
+    F1.socre <- 2*Precision*Recall/(Precision+Recall)
+    recall_hist2 <- c(recall_hist2,Recall)
+    recall_hist <- c(recall_hist,mean(recall_hist2))
+    F1.score_hist2 <-c(F1.score_hist2,F1.socre)
+    F1.score_hist<-c(F1.score_hist,mean(F1.score_hist2))
+}
+}
+
+cat("'Cost' value with best Recall:", values[which.max(recall_hist)],"Recall:",max(recall_hist),"\n")
+cat("'Cost' value with best overall Recall & F1.Score:",values[which.max(F1.score_hist+recall_hist)],"recall:",recall_hist[which.max(F1.score_hist+recall_hist)],"F1:",F1.score_hist[which.max(F1.score_hist+recall_hist)])
+par(mfrow=c(1,2))
+plot(values,recall_hist,type="l",main="Cost vs Recall",xlab="Cost",ylab="Recall")
+plot(values,F1.score_hist,type="l",main="Cost vs F1_score",xlab="Cost",ylab="F1_score")
+```
+
+
+```{r,collapse=TRUE,echo=FALSE}
+
+svm.mod3 <- svm(x=newtrain[,-5],y=newtrain[,5],kernel = "radial",type = "C-classification",cost=31,gamma=4)
+pred.SVM <- predict(svm.mod3,newtest[-5])
+
+
+TP <- sum((newtest$complication == pred.SVM)[pred.SVM == "pos"])
+TN <- sum((newtest$complication == pred.SVM)[pred.SVM == "neg"])
+FP <- sum((newtest$complication != pred.SVM)[pred.SVM == "pos"])
+FN <- sum((newtest$complication != pred.SVM)[pred.SVM == "neg"])
+Precision <- TP/(TP+FP)
+Recall <- TP/(TP+FN)
+F1.socre <- 2*Precision*Recall/(Precision+Recall) 
+acc <- sum(newtest$complication == pred.rand)/length(newtest$complication)
+
+cat("Below is SVM performance on Test data with Optimised 'Cost' and 'gamma':","\n")
+table(pred.SVM,newtest$complication)[2:1,2:1]
+
+cat("SVM Recall on Test data:", Recall, "\n")
+cat("SVM F1.Score on Test data:",F1.socre,"\n")
+cat("SVM Accuracy on Test data:",acc,"\n")
+svm.recall<-Recall
+svm.F1<-F1.socre
+
+```
+
+**Linear Discriminant Analysis (LDA)**
+
+LDA is a classification algorithm that produces linear boundaries using Bayes' Theorem. It takes the mean value for each class and considers variants before making predictions. It is a more preferred method than logistic regression in multi-classifiction problem and is more stable if classes are well separated. However, LDA makes some assumption on data that it is drawn from Gaussian distribution.
+
+Since this important assumption is not valid in the dataset (see below chart - code can be found in appendex 8), LDA might not be a good model to use for this dataset. And the result has also confirmed that LDA only achieves 0.11 in recall means ~89% of patients who have high complication risks are predicted to be negative by the model (code can be found in appendix 9).
+
+```{r,collapse=TRUE,echo=FALSE,fig.height=4,fig.width=6.5}
+#h.opt <- bw.ucv(newtrain[-1,1])
+density.est<-density(newtrain[-1,1],bw=0.3)
+#par(mfrow=c(1,2))
+hist(newtrain[-1,1],xlab="Feature1",prob=TRUE,main="Distribution of feature one",ylim=c(0,0.06))
+lines(density.est,main="Density Estimatation",col="red")
+legend("topright",c("Opitmal Bandwidth"),lty=c(1),col="red")
+#plot(density.est,main = "opti bandwith (Gaussian Kern) for Feature1")
+```
+
+
+```{r,collapse=TRUE,echo=FALSE}
+library(MASS)
+lda.mod <- lda(complication~.,newtrain,tol = 0.5)
+lda.pred <- predict(lda.mod,newtest[-5])$posterior[,"pos"]
+lda.pred2 <- ifelse(lda.pred>=0.5,"pos","neg")
+
+
+TP <- sum((newtest$complication == lda.pred2)[lda.pred2 == "pos"])
+TN <- sum((newtest$complication == lda.pred2)[lda.pred2 == "neg"])
+FP <- sum((newtest$complication != lda.pred2)[lda.pred2 == "pos"])
+FN <- sum((newtest$complication != lda.pred2)[lda.pred2 == "neg"])
+Precision <- TP/(TP+FP)
+Recall <- TP/(TP+FN)
+F1.socre <- 2*Precision*Recall/(Precision+Recall) 
+acc <- sum(newtest$complication == pred.rand)/length(newtest$complication)
+
+cat("Below is LDA Performance on Test data:","\n")
+table(lda.pred2,newtest$complication)[2:1,2:1]
+cat("LDA Recall on Test data:", Recall, "\n")
+cat("LDA F1.Score on Test data:",F1.socre,"\n")
+cat("LDA Accuracy on Test data:",acc,"\n")
+lda.recall<-Recall
+lda.F1<-F1.socre
+
+```
+
+
+
+**Model Comparison**
+
+In order to solve this classification problem (whether a patient will face complication after surgry), four very different algorithms have been implemented: random forest, K nearest neighbour, support vector machine and linear discriminant analysis. Please see below barplot for performance comparison between the four models (code can be found in appendix 10).
+
+
+
+
+```{r,echo=FALSE,fig.height=3.5,fig.width=10}
+aa <-c(random.recall,svm.recall,k.recall,lda.recall)
+bb<-c("RandomForest","SVM","KNN","LDA")
+colours<-c("dark blue","blue","#99ffff","#99ffcc")
+
+cc<-c(random.F1,svm.F1,k.F1,lda.F1)
+par(mfrow=c(1,2))
+barplot(aa,names.arg = bb,ylab="Recall",main="Recall Comparison",col = colours)
+barplot(cc,names.arg = bb,ylab="F1_score",main="F1 score Comparison",col = colours)
+```
+
+Random Forest is the most illustrative approach which basically tries to split data into different classes at each node based on Gini index or Information Gain. In our classification problem, Random Forest has got the best performance in both recall (0.66) and F1_score (0.76). 
+
+SVM comes in the second place with a recall of 0.59 and F1_Score of 0.67. The concept of generating the best fitted hyerplane between two classes (using hinge loss function) has been very effective in classification tasks. 
+
+KNN comes very close after SVM with a recall of 0.52 and F1_score of 0.68. It is the only nonparametric algorithms among the four means it always needs to carry training data in order to make predictions. On the other side, it is able to learn very complicated decision boundries. 
+
+LDA comes in the last place with recall of 0.11 and F1-score of 0.19 means it is quite ineffective when making postive predictions for our task here. One of the potential reasons is probably due to its pre-assumptions on data which is not valid in our dataset. 
+
+
+
+
+
+
+
+
+**Appendix**
+
+Appendix 1
+```{r,eval=FALSE,echo=TRUE,results="hide"}
+#Appendix 1
+
+par(mfrow = c(2,2))
+#age group histogram
+hist(mydata$Age,xlab = "Age of patient", main = "Patients by Age Group")
+#patient bmi status
+hist(mydata$bmi,xlab = "patient bmi", main = "Bmi Histogram of Patients")
+#patient by gender
+hist(mydata$gender,breaks = 2, xlab = "0.0-0.5 rep Male", main = "Gender Mix")
+#Operation hours
+hist(mydata$hour,xlab = "Hours",main= "Operation Hours")
+
+```
+
+Appendix 2
+```{r,eval=FALSE,echo=TRUE,results="hide"}
+
+trainclean<-cbind(train[myfeature],train$complication)
+testclean<-cbind(test[myfeature],test$complication)
+PCA <- prcomp(trainclean[,-20])
+PCA.Var <- PCA$sdev^2
+PCA.Var.Per <- PCA.Var/sum(PCA.Var)*100
+par(mfrow = c(1,2))
+barplot(PCA$sdev^2/sum(PCA$sdev^2)*100,main = "PCA component Var Rank", xlab = "Pincipal component", ylab = "Percentage Variation")
+barplot(cumsum(PCA.Var.Per),main = "Cum Var by PCA component",xlab = "Pincipal component", ylab = "Percentage Variation")
+#cumsum(PCA.Var.Per)
+
+newfeature1 <- PCA$x[,1]
+newfeature2 <- PCA$x[,2]
+newfeature3 <- PCA$x[,3]
+newfeature4 <- PCA$x[,4]
+
+mydata.df <- data.frame(PC1 = PCA$x[,1],PC2 = PCA$x[,2],labels = as.factor(train[,20]))
+
+library(ggplot2)
+
+ggplot(mydata.df,aes(PC1,PC2,col = labels))+geom_point(size=1)+ggtitle("Plot with the top 2 PCA component")
+
+
+newtrain <- cbind(newfeature1,newfeature2,newfeature3,newfeature4,train[20])
+pca2<-predict(PCA,newdata = testclean[,-20])
+newtest <- cbind(pca2[,1],pca2[,2],pca2[,3],pca2[,4],test[20])
+names(newtest)[1] <- "newfeature1"
+names(newtest)[2] <- "newfeature2"
+names(newtest)[3] <- "newfeature3"
+names(newtest)[4] <- "newfeature4"
+
+
+```
+
+
+
+Appendix 3
+
+```{r,eval=FALSE,echo=TRUE,results="hide"}
+## random forest H-parameter tuning mtry
+set.seed(321)
+fold <- createFolds(newtrain$complication, k = 10)
+recall_hist <- c()
+F1.score_hist <-c()
+values <- seq(1,4,by=1)
+for (x in values){
+  for (i in length(fold)){
+    
+    mypca<-prcomp(trainclean[-fold[[i]],-20])
+    newv<-predict(mypca,newdata=trainclean[fold[[i]],-20])
+
+    complications<- as.factor(trainclean[-fold[[i]],20])
+    newtrains<-data.frame(newfeature1=mypca$x[,1],newfeature2=mypca$x[,2],newfeature3=mypca$x[,3],newfeature4=mypca$x[,4],complication=complications)
+
+
+    complications2<- trainclean[fold[[i]],20]
+    newvali<-data.frame(newfeature1=newv[,1],newfeature2=newv[,2],newfeature3=newv[,3],newfeature4=newv[,4],complication=complications2)
+
+    
+    
+    recall_hist2 <- c()
+    F1.score_hist2 <-c()
+    rand.mod <- randomForest(complication~.,data=newtrains,ntree = 13,mtry = x)
+    pred <- predict(rand.mod,newdata=newvali)
+    TP <- sum((newvali[,5] == pred)[pred == "pos"])
+    TN <- sum((newvali[,5] == pred)[pred == "neg"])
+    FP <- sum((newvali[,5] != pred)[pred == "pos"])
+    FN <- sum((newvali[,5] != pred)[pred == "neg"])
+    Precision <- TP/(TP+FP)
+    Recall <- TP/(TP+FN)
+    F1.socre <- 2*Precision*Recall/(Precision+Recall)
+    recall_hist2 <- c(recall_hist2,Recall)
+    recall_hist <- c(recall_hist,mean(recall_hist2))
+    F1.score_hist2 <-c(F1.score_hist2,F1.socre)
+    F1.score_hist<-c(F1.score_hist,mean(F1.score_hist2))
+}
+}
+
+cat("'mtry' value with best recall:", values[which.max(recall_hist)],"Recall:",max(recall_hist),"\n")
+cat("'mtry' value with best overall Recall & F1.Score:",values[which.max(F1.score_hist+recall_hist)],"recall:",recall_hist[which.max(F1.score_hist+recall_hist)],"F1:",F1.score_hist[which.max(F1.score_hist+recall_hist)])
+
+par(mfrow=c(1,2))
+plot(values,recall_hist,type="l",main="mtry vs Recall",xlab="mtry",ylab="Recall")
+plot(values,F1.score_hist,type="l",main="mtry vs F1_score",xlab="mtry",ylab="F1_score")
+```
+
+`
+Appendix 4
+```{r,eval=FALSE,echo=TRUE,results="hide"}
+library(randomForest)
+random.model <- randomForest(complication~.,data = newtrain,mtry=4,ntree=27)
+pred.rand <- predict(random.model,newdata = newtest)
+
+TP <- sum((newtest$complication == pred.rand)[pred.rand == "pos"])
+TN <- sum((newtest$complication == pred.rand)[pred.rand == "neg"])
+FP <- sum((newtest$complication != pred.rand)[pred.rand == "pos"])
+FN <- sum((newtest$complication != pred.rand)[pred.rand == "neg"])
+Precision <- TP/(TP+FP)
+Recall <- TP/(TP+FN)
+F1.socre <- 2*Precision*Recall/(Precision+Recall) 
+acc <- sum(newtest$complication == pred.rand)/length(newtest$complication)
+
+cat("Below is Random Forest Performance on Test data with Optimised 'ntree' and 'mtry':","\n")
+table(pred.rand,newtest$complication)[2:1,2:1]
+cat("Random Forest Recall on Test data:", Recall, "\n")
+cat("Random Forest F1.Score on Test data:",F1.socre,"\n")
+cat("Random Forest Accuracy on Test data:",acc,"\n")
+
+random.recall <- Recall
+random.F1<-F1.socre
+```
+
+
+Appendix 5
+```{r,eval=FALSE,echo=TRUE,results="hide"}
+
+knn.mod2 <- knn(newtrain[-5],newtest[-5],cl=newtrain[,5],k=9)
+
+TP <- sum((newtest$complication == knn.mod2)[knn.mod2 == "pos"])
+TN <- sum((newtest$complication == knn.mod2)[knn.mod2 == "neg"])
+FP <- sum((newtest$complication != knn.mod2)[knn.mod2 == "pos"])
+FN <- sum((newtest$complication != knn.mod2)[knn.mod2 == "neg"])
+Precision <- TP/(TP+FP)
+Recall <- TP/(TP+FN)
+F1.socre <- 2*Precision*Recall/(Precision+Recall) 
+acc <- sum(newtest$complication == pred.rand)/length(newtest$complication)
+
+cat("Below is KNN Performance on Test data with Optimised 'k':","\n")
+table(knn.mod2,newtest$complication)[2:1,2:1]
+cat("KNN Recall on Test data:", Recall, "\n")
+cat("KNN F1.Score on Test data:",F1.socre,"\n")
+cat("KNN Accuracy on Test data:",acc,"\n")
+k.recall <- Recall
+k.F1<-F1.socre
+```
+
+
+Appendix 6
+```{r,eval=FALSE,echo=TRUE,results="hide"}
+##SVM H-parameter tuning - Cost
+library(e1071)
+set.seed(321)
+fold <- createFolds(newtrain$complication, k = 5)
+
+values <- c(seq(1,100,by=10),500)
+
+F1.score_hist <-c()
+recall_hist <- c()
+for (x in values){
+  for (i in length(fold)){
+    
+    mypca<-prcomp(trainclean[-fold[[i]],-20])
+    newv<-predict(mypca,newdata=trainclean[fold[[i]],-20])
+
+    complications<- as.factor(trainclean[-fold[[i]],20])
+    newtrains<-data.frame(newfeature1=mypca$x[,1],newfeature2=mypca$x[,2],newfeature3=mypca$x[,3],newfeature4=mypca$x[,4],complication=complications)
+    complications2<- trainclean[fold[[i]],20]
+    newvali<-data.frame(newfeature1=newv[,1],newfeature2=newv[,2],newfeature3=newv[,3],newfeature4=newv[,4],complication=complications2)
+    
+    recall_hist2 <- c()
+    F1.score_hist2 <-c()
+    mod <- svm(x=newtrains[,-5],y=newtrains[,5],kernel="radial",type="C-classification",cost=x,gamma=4)
+    pred <- predict(mod,newvali[,-5])
+    TP <- sum((newvali[,5] == pred)[pred == "pos"])
+    TN <- sum((newvali[,5] == pred)[pred == "neg"])
+    FP <- sum((newvali[,5] != pred)[pred == "pos"])
+    FN <- sum((newvali[,5] != pred)[pred == "neg"])
+    Precision <- TP/(TP+FP)
+    Recall <- TP/(TP+FN)
+    F1.socre <- 2*Precision*Recall/(Precision+Recall)
+    recall_hist2 <- c(recall_hist2,Recall)
+    recall_hist <- c(recall_hist,mean(recall_hist2))
+    F1.score_hist2 <-c(F1.score_hist2,F1.socre)
+    F1.score_hist<-c(F1.score_hist,mean(F1.score_hist2))
+}
+}
+
+cat("'Cost' value with best Recall:", values[which.max(recall_hist)],"Recall:",max(recall_hist),"\n")
+cat("'Cost' value with best overall Recall & F1.Score:",values[which.max(F1.score_hist+recall_hist)],"recall:",recall_hist[which.max(F1.score_hist+recall_hist)],"F1:",F1.score_hist[which.max(F1.score_hist+recall_hist)])
+par(mfrow=c(1,2))
+plot(values,recall_hist,type="l",main="Cost vs Recall",xlab="Cost",ylab="Recall")
+plot(values,F1.score_hist,type="l",main="Cost vs F1_score",xlab="Cost",ylab="F1_score")
+```
+
+
+Appendix 7
+```{r,eval=FALSE,echo=TRUE,results="hide"}
+svm.mod3 <- svm(x=newtrain[,-5],y=newtrain[,5],kernel = "radial",type = "C-classification",cost=31,gamma=4)
+pred.SVM <- predict(svm.mod3,newtest[-5])
+
+
+TP <- sum((newtest$complication == pred.SVM)[pred.SVM == "pos"])
+TN <- sum((newtest$complication == pred.SVM)[pred.SVM == "neg"])
+FP <- sum((newtest$complication != pred.SVM)[pred.SVM == "pos"])
+FN <- sum((newtest$complication != pred.SVM)[pred.SVM == "neg"])
+Precision <- TP/(TP+FP)
+Recall <- TP/(TP+FN)
+F1.socre <- 2*Precision*Recall/(Precision+Recall) 
+acc <- sum(newtest$complication == pred.rand)/length(newtest$complication)
+
+cat("Below is SVM performance on Test data with Optimised 'Cost' and 'gamma':","\n")
+table(pred.SVM,newtest$complication)[2:1,2:1]
+
+cat("SVM Recall on Test data:", Recall, "\n")
+cat("SVM F1.Score on Test data:",F1.socre,"\n")
+cat("SVM Accuracy on Test data:",acc,"\n")
+svm.recall<-Recall
+svm.F1<-F1.socre
+```
+
+
+Appendix 8
+```{r,eval=FALSE,echo=TRUE,results="hide"}
+h.opt <- bw.ucv(newtrain[-1,1])
+density.est<-density(newtrain[-1,1],bw=h.opt)
+
+hist(newtrain[-1,1],xlab="Feature1",prob=TRUE,main="Distribution of feature one",ylim=c(0,0.06))
+lines(density.est,main="Density Estimatation",col="red")
+legend("topright",c("Opitmal Bandwidth"),lty=c(1),col="red")
+
+```
+
+
+Appendix 9
+```{r,eval=FALSE,echo=TRUE,results="hide"}
+library(MASS)
+lda.mod <- lda(complication~.,newtrain,tol = 0.5)
+lda.pred <- predict(lda.mod,newtest[-5])$posterior[,"pos"]
+lda.pred2 <- ifelse(lda.pred>=0.5,"pos","neg")
+
+
+TP <- sum((newtest$complication == lda.pred2)[lda.pred2 == "pos"])
+TN <- sum((newtest$complication == lda.pred2)[lda.pred2 == "neg"])
+FP <- sum((newtest$complication != lda.pred2)[lda.pred2 == "pos"])
+FN <- sum((newtest$complication != lda.pred2)[lda.pred2 == "neg"])
+Precision <- TP/(TP+FP)
+Recall <- TP/(TP+FN)
+F1.socre <- 2*Precision*Recall/(Precision+Recall) 
+acc <- sum(newtest$complication == pred.rand)/length(newtest$complication)
+
+cat("Below is LDA Performance on Test data:","\n")
+table(lda.pred2,newtest$complication)[2:1,2:1]
+cat("LDA Recall on Test data:", Recall, "\n")
+cat("LDA F1.Score on Test data:",F1.socre,"\n")
+cat("LDA Accuracy on Test data:",acc,"\n")
+lda.recall<-Recall
+lda.F1<-F1.socre
+```
+
+
+Appendix 10
+```{r,eval=FALSE,echo=TRUE,results="hide"}
+aa <-c(random.recall,svm.recall,k.recall,lda.recall)
+bb<-c("RandomForest","SVM","KNN","LDA")
+colours<-c("dark blue","blue","#99ffff","#99ffcc")
+
+cc<-c(random.F1,svm.F1,k.F1,lda.F1)
+par(mfrow=c(1,2))
+barplot(aa,names.arg = bb,ylab="Recall",main="Recall Comparison",col = colours)
+barplot(cc,names.arg = bb,ylab="F1_score",main="F1 score Comparison",col = colours)
+```
+
+
+
+*References:*
+
+1.*Size and distribution of the global volume of surgery in 2012* available at: https://www.who.int/bulletin/volumes/94/3/15-159293/en/
+
+2.*Kaggle.com* avaiable at: https://www.kaggle.com/omnamahshivai/surgical-dataset-binary-classification (accessed on 17 April 2020)
+
+3.https://www.nhs.uk/common-health-questions/lifestyle/what-is-the-body-mass-index-bmi/ (accessed on 20 April 2020)
+
+
+
+
