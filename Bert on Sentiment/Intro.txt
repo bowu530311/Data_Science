@@ -1,0 +1,1 @@
+Using Bert (pre-trained transformer model) to perform sentiment analysis on kaggle movie datasets.

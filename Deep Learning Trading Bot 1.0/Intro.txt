@@ -1,0 +1,2 @@
+This project is to develop a deep learning algo to predict future price movement of financial instruments (AUD_USD in this case).
+Build a auto trading bot based on the above algo and deploy it to an online trading platform for live trading (with demo or real money). This is version 1.0 and future updates with some big changes (re-write the whole training process) is coming in order to boost its performance in regards to profitability.
