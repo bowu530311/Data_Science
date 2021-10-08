@@ -1,0 +1,2 @@
+This is just to make future prediction on past pattern (timeseries) using Bi_LSTM.
+As the dataset is really small, using nerual network might not generate good performance but it is good for demo purpose.
